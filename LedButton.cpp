@@ -1,7 +1,7 @@
 #include <cstdlib>
 #include "Arduino.h"
+#include "Miditaur.h"
 #include "LedButton.h"
-#include "States.h"
 
 LedButton::LedButton(uint8_t _index, uint8_t _buttonPin, uint8_t _ledPin, Bounce2::Button* _button, void (*_onTransition)(LedButton* button, Global global), void (*_onActivate)(LedButton* self, Global global)) {
   index = _index;
@@ -18,7 +18,7 @@ void LedButton::setup(int debounceDelay) {
   button->interval(debounceDelay);
   button->setPressedState(LOW);
 
-  preset = loadPreset();
+  loadPreset();
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
@@ -26,8 +26,7 @@ void LedButton::setup(int debounceDelay) {
 
 bool LedButton::pressed() {
   button->update();
-  bool pressed = button->pressed();
-  return pressed;
+  return button->pressed();
 }
 
 void LedButton::transitionTo(Global global) {
@@ -38,15 +37,27 @@ void LedButton::activate(Global global) {
   activateCB(this, global);
 }
 
-bool LedButton::canActivate() {
-  return nextState;
+void LedButton::switchBank(uint8_t _bank) {
+  bank = _bank;
+  loadPreset();
 }
 
-uint8_t LedButton::loadPreset() {
-  uint8_t loadedPreset = EEPROM.read(index);
+void LedButton::assignPreset(uint8_t _preset) {
+  EEPROM.write(memoryAddress(), _preset);
+  preset = _preset;
+}
+
+// PRIVATE
+
+uint8_t LedButton::memoryAddress() {
+  return (bank * 10) + index;
+}
+
+void LedButton::loadPreset() {
+  uint8_t loadedPreset = EEPROM.read(memoryAddress());
   if (loadedPreset) {
-    return loadedPreset;
+    preset = loadedPreset;
   } else {
-    return 0;
+    preset = 0;
   }
 }
