@@ -3,14 +3,15 @@
 #include "Miditaur.h"
 #include "LedButton.h"
 
-LedButton::LedButton(uint8_t _index, uint8_t _buttonPin, uint8_t _ledPin, Bounce2::Button* _button, void (*_onTransition)(LedButton* button, Global global), void (*_onActivate)(LedButton* self, Global global)) {
-  index = _index;
-  preset = 0;
+LedButton::LedButton(ButtonType _type, uint8_t _index, uint8_t _buttonPin, uint8_t _ledPin, Bounce2::Button* _button) {
+  type = _type;
   buttonPin = _buttonPin;
   ledPin = _ledPin;
+  index = _index;
+  bank = 0;
+  preset = 0;
+  ledState = LED_OFF;
   button = _button;
-  transitionCB = _onTransition;
-  activateCB = _onActivate;
 }
 
 void LedButton::setup(int debounceDelay) {
@@ -18,46 +19,56 @@ void LedButton::setup(int debounceDelay) {
   button->interval(debounceDelay);
   button->setPressedState(LOW);
 
-  loadPreset();
-
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
 }
 
-bool LedButton::pressed() {
-  button->update();
-  return button->pressed();
+void LedButton::switchToBank(uint8_t bank) {
+  loadPreset(bank);
 }
 
-void LedButton::transitionTo(Global global) {
-  transitionCB(this, global);
-}
-
-void LedButton::activate(Global global) {
-  activateCB(this, global);
-}
-
-void LedButton::switchBank(uint8_t _bank) {
-  bank = _bank;
-  loadPreset();
-}
-
-void LedButton::assignPreset(uint8_t _preset) {
-  EEPROM.write(memoryAddress(), _preset);
+void LedButton::assignPreset(uint8_t bank, uint8_t _preset) {
+  uint8_t address = memoryAddress(bank, index);
+  Serial.print("Assigning Preset");
+  Serial.print(_preset);
+  Serial.print(" to FAV");
+  Serial.print(index);
+  Serial.print(" in Bank: ");
+  Serial.print(bank);
+  Serial.print(", Address: ");
+  Serial.println(address);
+  EEPROM.write(address, _preset);
   preset = _preset;
 }
 
-// PRIVATE
-
-uint8_t LedButton::memoryAddress() {
-  return (bank * 10) + index;
-}
-
-void LedButton::loadPreset() {
-  uint8_t loadedPreset = EEPROM.read(memoryAddress());
+void LedButton::loadPreset(uint8_t bank) {
+  uint8_t address = memoryAddress(bank, index);
+  Serial.print("Loading Preset for FAV");
+  Serial.print(index);
+  Serial.print(" from Bank: ");
+  Serial.print(bank);
+  Serial.print(", Address: ");
+  Serial.println(address);
+  uint8_t loadedPreset = EEPROM.read(address);
   if (loadedPreset) {
     preset = loadedPreset;
   } else {
     preset = 0;
   }
+}
+
+void LedButton::clearPreset(uint8_t bank) {
+  uint8_t address = memoryAddress(bank, index);
+  Serial.print("Clearing Preset for FAV");
+  Serial.print(index);
+  Serial.print(" from Bank: ");
+  Serial.print(bank);
+  Serial.print(", Address: ");
+  Serial.println(address);
+  EEPROM.write(address, 0);
+  preset = 0;
+}
+
+uint8_t LedButton::memoryAddress(uint8_t bank, uint8_t index) {
+  return (bank * 10) + index;
 }

@@ -6,9 +6,10 @@
 enum ProgramState {
   STATE_ERROR,
   STATE_IDLE,
-  STATE_ASSIGNING_FAV_PRESET,
-  STATE_SELECTING_BANK,
-  STATE_BANK_CHANGED,
+  STATE_SELECT_BANK,
+  STATE_ASSIGN_PRESET,
+  STATE_CLEAR_PRESET,
+  
 
   STATE_MENU_FILTER,
   STATE_FILTER_ATTACK,
@@ -41,21 +42,13 @@ enum ButtonState {
 enum LedState {
   LED_OFF,
   LED_ON,
-  LED_PRESSED,
   LED_BLINKING
 };
+
 
 struct MenuItem {
   ProgramState nextState;
   char text[4];
-};
-
-
-struct Global {
-  ProgramState state;
-  SevSeg* display;
-  uint8_t activePreset;
-  uint8_t activeBank;
 };
 
 #endif
