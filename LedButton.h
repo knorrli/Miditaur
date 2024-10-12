@@ -12,10 +12,10 @@ private:
   uint8_t memoryAddress(uint8_t bank, uint8_t index);
 
 public:
-  LedButton(ButtonType _type, uint8_t _index, uint8_t _buttonPin, uint8_t _ledPin, Bounce2::Button* _button);
+  LedButton(ButtonType _type, uint8_t _index, bool supportContinuousPress, uint8_t _buttonPin, uint8_t _ledPin, Bounce2::Button* _button);
   uint8_t type;
   uint8_t index;
-  uint8_t bank;
+  bool supportContinuousPress;
   uint8_t preset;
   uint8_t buttonPin;
   uint8_t ledPin;
@@ -25,6 +25,7 @@ public:
   void setup(int debounceDelay);
 
   void switchToBank(uint8_t bank);
+  bool hasPreset();
   void assignPreset(uint8_t bank, uint8_t _preset);
   void loadPreset(uint8_t bank);
   void clearPreset(uint8_t bank);

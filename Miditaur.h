@@ -9,19 +9,10 @@ enum ProgramState {
   STATE_SELECT_BANK,
   STATE_ASSIGN_PRESET,
   STATE_CLEAR_PRESET,
-  
 
-  STATE_MENU_FILTER,
-  STATE_FILTER_ATTACK,
-  STATE_FILTER_DECAY,
-  STATE_FILTER_SUSTAIN,
-  STATE_FILTER_RELEASE,
 
-  STATE_MENU_AMP,
-  STATE_AMP_ATTACK,
-  STATE_AMP_DECAY,
-  STATE_AMP_SUSTAIN,
-  STATE_AMP_RELEASE
+  STATE_MENU,
+  STATE_MENU_ITEM
 };
 
 enum ButtonType {
@@ -47,8 +38,14 @@ enum LedState {
 
 
 struct MenuItem {
-  ProgramState nextState;
   char text[4];
+  boolean active;
+  uint8_t value;
+};
+
+struct Submenu {
+  char text[4];
+  MenuItem *items[5];
 };
 
 #endif
