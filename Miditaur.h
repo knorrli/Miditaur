@@ -5,6 +5,7 @@
 
 enum ProgramState {
   STATE_ERROR,
+  
   STATE_IDLE,
   STATE_SELECT_BANK,
   STATE_ASSIGN_PRESET,

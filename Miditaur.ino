@@ -29,6 +29,7 @@
 #define PIN_BUTTON_SAVE 17
 
 #define DEBOUNCE_DELAY 5
+#define STARTUP_ANIMATION_DURATION 35
 
 #define NUM_DIGITS 3
 #define NUM_FAV_BUTTONS 5
@@ -46,6 +47,7 @@
 #define INITIAL_CONTINUOUS_PRESS_DELAY 750
 #define CONTINUOUS_PRESS_INTERVAL 100
 #define TRANSITION_TEXT_DURATION 1000
+#define STARTUP_ANIMATION_STEPS 19
 
 USBHost myusb;
 MIDIDevice midiDevice(myusb);
@@ -56,7 +58,37 @@ unsigned long previousBlinkMillis = 0;
 unsigned long lastContinuousPress = 0;
 unsigned long lastTransitionTextStart = 0;
 bool blinkState = HIGH;
-
+//7-segment map:
+//   AAA
+//  F   B
+//  F   B
+//   GGG
+//  E   C
+//  E   C
+//   DDD   H
+// HGFEDCBA
+uint8_t startupAnimationDigit = 2;
+uint8_t startupAnimationStep = STARTUP_ANIMATION_STEPS;
+uint8_t animation[18] = {
+  0b01000000, // PLACEHOLDER
+  0b01000000, // G
+  0b01000010, // BG
+  0b00000010, // B
+  0b00000011, // AB
+  0b00000001, // A
+  0b00100001, // FA
+  0b00100000, // F
+  0b01100000, // GF
+  0b01000000, // G
+  0b01000100, // CG
+  0b00000100, // C
+  0b00001100, // DC
+  0b00001000, // D
+  0b00011000, // ED
+  0b00010000, // E
+  0b01010000, // GE
+  0b01000000, // G
+};
 String textNoAction = "---";
 String transitionText = "";
 ProgramState nextState = STATE_IDLE;
@@ -126,14 +158,17 @@ String programStates[] = { "ERROR", "IDLE", "SELECT_BANK", "ASSIGN_PRESET", "CLE
 
 void setup() {
   Serial.begin(9600);
-  delay(1500);  // Safe setup
 
-  // myusb.begin();
-  // midiDevice.setHandleProgramChange(OnProgramChange);
+  delay(3000);  // Safe setup
+
+  myusb.begin();
+  midiDevice.setHandleProgramChange(OnProgramChange);
+
+  setupDisplay();
 
   digitalWrite(LED_BUILTIN, HIGH);
 
-  setupDisplay();
+
 
   switchToBank(activeBank);
   switchToPreset(activePreset);
@@ -142,7 +177,6 @@ void setup() {
     ledButton->setup(DEBOUNCE_DELAY);
     handleTransition(ledButton, STATE_IDLE);
   }
-  display.setNumber(activePreset);
 
   Serial.println("READY");
 }
@@ -150,11 +184,47 @@ void setup() {
 void loop() {
   myusb.Task();
   midiDevice.read();
-
   if (deviceConnected && !midiDevice) {
     OnDisconnect();
   } else if (!deviceConnected && midiDevice) {
     OnConnect();
+  }
+
+  if (startupAnimationStep > 0) {
+    if (millis() - lastTransitionTextStart > STARTUP_ANIMATION_DURATION) {
+      uint8_t animationStep = animation[startupAnimationStep-1];
+      printBin(animationStep);
+      startupAnimationStep--;
+
+      display.blank();
+      lastTransitionTextStart = millis();
+
+      display.setSegmentsDigit(startupAnimationDigit, animationStep);
+
+      if (startupAnimationStep == 0) {
+        if (startupAnimationDigit > 0) {
+          startupAnimationDigit--;
+          startupAnimationStep = STARTUP_ANIMATION_STEPS - 1;
+          display.setSegmentsDigit(startupAnimationDigit, animationStep);
+          Serial.println("RESET");
+        } else {
+          display.setNumber(activePreset);
+          display.getSegments(displaySegments);
+          transitionText = "RDY";
+          char transitionChars[4];
+          transitionText.toCharArray(transitionChars, 4);
+          display.setChars(transitionChars);
+          lastTransitionTextStart = millis();
+        }
+      }
+    }
+
+    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+      LedButton* ledButton = ledButtons[i];
+      ledButton->button->update();
+    }
+    display.refreshDisplay();
+    return; // RETURN EARLY DURING ANIMATION
   }
 
   for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
@@ -166,6 +236,7 @@ void loop() {
     LedButton* ledButton = ledButtons[i];
 
     if (continuousPress(ledButton) || ledButton->button->pressed()) {
+      transitionText = "";
       nextState = handlePress(ledButton, state);
       activeButton = ledButton;
 
@@ -182,8 +253,6 @@ void loop() {
 
   if (activeButton && activeButton->button->released()) {
     updateState(nextState);
-    // Serial.print("Transition BUTTONS to ");
-    // Serial.println(programStates[state]);
     for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
       LedButton* ledButton = ledButtons[i];
       handleTransition(ledButton, state);
@@ -200,22 +269,11 @@ void loop() {
   render();
 }
 
-void prepareBlinkState() {
-  if (millis() - previousBlinkMillis >= BLINK_INTERVAL) {
-    previousBlinkMillis = millis();
-
-    if (blinkState == LOW) {
-      blinkState = HIGH;
-    } else {
-      blinkState = LOW;
-    }
-  }
-}
-
 void render() {
   prepareBlinkState();
 
   for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+
     LedButton* ledButton = ledButtons[i];
     switch (ledButton->ledState) {
       case LED_ON:
@@ -236,6 +294,17 @@ void render() {
   display.refreshDisplay();
 }
 
+void prepareBlinkState() {
+  if (millis() - previousBlinkMillis >= BLINK_INTERVAL) {
+    previousBlinkMillis = millis();
+
+    if (blinkState == LOW) {
+      blinkState = HIGH;
+    } else {
+      blinkState = LOW;
+    }
+  }
+}
 
 void handleTransition(LedButton* button, ProgramState state) {
   switch (state) {
@@ -258,18 +327,14 @@ void handleTransition(LedButton* button, ProgramState state) {
       onTransitionToMenuItem(button);
       break;
     default:
-      Serial.print("TRANSITION NOT HANDLED: ");
+      Serial.print("STATE NOT HANDLED");
       Serial.println(state);
-      break;
+      display.setChars("ERR");
   }
 }
 
 ProgramState handlePress(LedButton* button, ProgramState state) {
   switch (state) {
-    case STATE_ERROR:
-      Serial.println("ERROR");
-      display.setChars("ERR");
-      return STATE_ERROR;
     case STATE_IDLE:
       return handleIdlePress(button);
     case STATE_SELECT_BANK:
@@ -283,8 +348,8 @@ ProgramState handlePress(LedButton* button, ProgramState state) {
     case STATE_MENU_ITEM:
       return handleMenuItemPress(button);
     default:
-      Serial.print("PRESS NOT HANDLED: ");
-      Serial.println(programStates[state]);
+      Serial.print("STATE NOT HANDLED");
+      Serial.println(state);
       display.setChars("ERR");
       return STATE_ERROR;
   }
@@ -351,9 +416,8 @@ ProgramState handleIdlePress(LedButton* button) {
         return STATE_CLEAR_PRESET;
       }
       return STATE_ASSIGN_PRESET;
-    default:
-      return STATE_ERROR;
   }
+  return STATE_ERROR;
 }
 
 void onTransitionToAssignPreset(LedButton* button) {
@@ -402,9 +466,8 @@ ProgramState handleAssignPresetPress(LedButton* button) {
     case TYPE_BANK:
     case TYPE_MENU:
       return state;
-    default:
-      return STATE_ERROR;
   }
+  return STATE_ERROR;
 }
 
 void onTransitionToClearPreset(LedButton* button) {
@@ -449,9 +512,8 @@ ProgramState handleClearPresetPress(LedButton* button) {
     case TYPE_BANK:
     case TYPE_MENU:
       return state;
-    default:
-      return STATE_ERROR;
   }
+  return STATE_ERROR;
 }
 
 void onTransitionToSelectBank(LedButton* button) {
@@ -495,9 +557,8 @@ ProgramState handleSelectBankPress(LedButton* button) {
       switchToPreset(activePreset);
       transitionText = textNoAction;
       return STATE_IDLE;
-    default:
-      return STATE_ERROR;
-  };
+  }
+  return STATE_ERROR;
 }
 
 void onTransitionToMenu(LedButton* button) {
@@ -507,17 +568,17 @@ void onTransitionToMenu(LedButton* button) {
       {
         MenuItem* buttonMenuItem = menu->items[button->index - 1];
         if (buttonMenuItem->active) {
-          button->ledState = LED_ON;
+          button->ledState = LED_BLINKING;
         } else {
           button->ledState = LED_OFF;
         }
         break;
       }
-    case TYPE_PREV:
-    case TYPE_NEXT:
     case TYPE_MENU:
       button->ledState = LED_ON;
       break;
+    case TYPE_PREV:
+    case TYPE_NEXT:
     case TYPE_BANK:
     case TYPE_SAVE:
       button->ledState = LED_OFF;
@@ -545,19 +606,15 @@ ProgramState handleMenuPress(LedButton* button) {
     case TYPE_PREV:
       switchToMenu(activeMenuIndex - 1);
       return STATE_MENU;
-
     case TYPE_NEXT:
-      switchToMenu(activeMenuIndex + 1);
-      return STATE_MENU;
     case TYPE_MENU:
       switchToMenu(activeMenuIndex + 1);
       return STATE_MENU;
     case TYPE_SAVE:
       switchToPreset(activePreset);
       return STATE_IDLE;
-    default:
-      return STATE_ERROR;
-  };
+  }
+  return STATE_ERROR;
 }
 
 void onTransitionToMenuItem(LedButton* button) {
@@ -611,6 +668,8 @@ ProgramState handleMenuItemPress(LedButton* button) {
           return STATE_MENU_ITEM;
         }
       }
+    case TYPE_BANK:
+      return state;
     case TYPE_PREV:
       {
         MenuItem* activeMenuItem = menu->items[activeMenuItemIndex];
@@ -637,9 +696,8 @@ ProgramState handleMenuItemPress(LedButton* button) {
     case TYPE_SAVE:
       switchToPreset(activePreset);
       return STATE_IDLE;
-    default:
-      return state;
-  };
+  }
+  return STATE_ERROR;
 }
 
 void setupDisplay() {
@@ -723,6 +781,8 @@ bool continuousPress(LedButton* button) {
   unsigned long currentMillis = millis();
   if ((button->button->currentDuration() > INITIAL_CONTINUOUS_PRESS_DELAY) && (currentMillis - lastContinuousPress >= CONTINUOUS_PRESS_INTERVAL)) {
     lastContinuousPress = millis();
+    Serial.print("CONTINUOUS PRESS: ");
+    Serial.println(names[button->index - 1]);
     return true;
   } else {
     return false;
@@ -737,7 +797,7 @@ void OnConnect() {
 void OnDisconnect() {
   deviceConnected = false;
   midiChannel = 0;
-  activePreset = 0;
+  activePreset = 255;
   Serial.println("Disconnect");
 }
 
@@ -748,4 +808,10 @@ void OnProgramChange(uint8_t channel, uint8_t preset) {
   Serial.print(channel);
   Serial.print(", Program: ");
   Serial.println(preset);
+}
+
+void printBin(byte aByte) {
+  for (int8_t aBit = 7; aBit >= 0; aBit--)
+    Serial.write(bitRead(aByte, aBit) ? '1' : '0');
+  Serial.println();
 }
