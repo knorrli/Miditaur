@@ -47,10 +47,11 @@
 #define INITIAL_CONTINUOUS_PRESS_DELAY 750
 #define CONTINUOUS_PRESS_INTERVAL 100
 #define TRANSITION_TEXT_DURATION 1000
+#define CONTROL_CHANGE_TIMEOUT 100
 #define STARTUP_ANIMATION_STEPS 19
 
-#define SYSEX_SEND_CC_SIZE 7
-#define SYSEX_SAVE_PANEL_SIZE 17
+#define SYSEX_SEND_CC_SIZE 5
+#define SYSEX_SAVE_PANEL_SIZE 15
 
 
 #define NAME_FILTER "FIL"
@@ -93,9 +94,11 @@ MIDIDevice midiDevice(myusb);
 
 bool deviceConnected = false;
 uint8_t midiChannel = 1;
-bool displayingControlChange = false;
+bool receivingControlChange = false;
 bool midiReceived = false;
 bool blinkState = HIGH;
+bool controlChangeValueDisplayEnabled = true;
+uint8_t lastFavButtonIndex = 255;
 unsigned long previousBlinkMillis = 0;
 unsigned long lastContinuousPress = 0;
 unsigned long lastTransitionTextStart = 0;
@@ -145,15 +148,15 @@ uint8_t activePreset = INITIAL_PRESET;
 uint8_t activeMenuIndex = 0;
 uint8_t activeMenuItemIndex = 0;
 
-uint8_t sysExTriggerSendCC[SYSEX_SEND_CC_SIZE] = { 0xF0, 0x04, 0x08, 0x1B, 0x00, 0x00, 0xF7 };
-uint8_t sysExTriggerSavePanel[SYSEX_SAVE_PANEL_SIZE] = { 0xF0, 0x04, 0x08, 0x06, 0x07, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF7 };
+byte sysExTriggerSendCC[SYSEX_SEND_CC_SIZE] = { 0x04, 0x08, 0x1B, 0x00, 0x00 };
+byte sysExTriggerSavePanel[SYSEX_SAVE_PANEL_SIZE] = { 0x04, 0x08, 0x06, 0x07, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 MenuItem emptyMenuItem = { .text = NAME_ERROR, .midiCC = 0, .active = false, .value = 0, .displayMin = 0, .displayMax = 0 };
 
-MenuItem filterAttack = { .text = NAME_ATTACK, .midiCC = 22, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
+MenuItem filterAttack = { .text = NAME_ATTACK, .midiCC = 23, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 MenuItem filterDecay = { .text = NAME_DECAY, .midiCC = 24, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 MenuItem filterSustain = { .text = NAME_SUSTAIN, .midiCC = 25, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
-MenuItem filterRelease = { .text = NAME_RELEASE, .midiCC = 24, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
+MenuItem filterRelease = { .text = NAME_RELEASE, .midiCC = 26, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 Submenu filterMenu = {
   .text = NAME_FILTER,
   .items = { &filterAttack, &filterDecay, &filterSustain, &filterRelease, &emptyMenuItem }
@@ -162,7 +165,7 @@ Submenu filterMenu = {
 MenuItem ampAttack = { .text = NAME_ATTACK, .midiCC = 28, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 MenuItem ampDecay = { .text = NAME_DECAY, .midiCC = 29, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 MenuItem ampSustain = { .text = NAME_SUSTAIN, .midiCC = 30, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
-MenuItem ampRelease = { .text = NAME_RELEASE, .midiCC = 29, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
+MenuItem ampRelease = { .text = NAME_RELEASE, .midiCC = 21, .active = true, .value = 64, .displayMin = 0, .displayMax = 127 };
 MenuItem ampTriggerMode{ .text = NAME_AMP_TRIGGER_MODE, .midiCC = 73, .active = true, .value = 0, .displayMin = 0, .displayMax = 127 };
 Submenu ampMenu = {
   .text = NAME_AMP,
@@ -282,9 +285,9 @@ void loop() {
   midiDevice.read();
 
   if (deviceConnected && !midiDevice) {
-    OnDisconnect();
+    onDisconnect();
   } else if (!deviceConnected && midiDevice) {
-    OnConnect();
+    onConnect();
   }
 
   if (startupAnimationStep > 0) {
@@ -317,10 +320,12 @@ void loop() {
   }
 
   // restore segments saved before displaying CC value
-  if (displayingControlChange && (millis() - lastControlChangeReceivedMillis >= TRANSITION_TEXT_DURATION)) {
-    Serial.print("RESETTING DISPLAY");
-    displayingControlChange = false;
-
+  if (receivingControlChange && (millis() - lastControlChangeReceivedMillis >= CONTROL_CHANGE_TIMEOUT)) {
+    Serial.println("CONTROL CHANGE RCV Ended");
+    receivingControlChange = false;
+    if (!controlChangeValueDisplayEnabled) {
+      controlChangeValueDisplayEnabled = true;
+    }
 
     if (state == STATE_MENU_ITEM) {
       Submenu* menu = menus[activeMenuIndex];
@@ -398,8 +403,8 @@ void handleTransition(LedButton* button, ProgramState state) {
     case STATE_ASSIGN_PRESET:
       onTransitionToAssignPreset(button);
       break;
-    case STATE_STORE_PRESET:
-      onTransitionToStorePreset(button);
+    case STATE_SAVE_PRESET:
+      onTransitionToSavePreset(button);
       break;
     case STATE_CLEAR_PRESET:
       onTransitionToClearPreset(button);
@@ -425,8 +430,8 @@ ProgramState handlePress(LedButton* button, ProgramState state) {
       return handleSelectBankPress(button);
     case STATE_ASSIGN_PRESET:
       return handleAssignPresetPress(button);
-    case STATE_STORE_PRESET:
-      return handleStorePresetPress(button);
+    case STATE_SAVE_PRESET:
+      return handleSavePresetPress(button);
     case STATE_CLEAR_PRESET:
       return handleClearPresetPress(button);
     case STATE_MENU:
@@ -467,6 +472,13 @@ void onTransitionToIdle(LedButton* button) {
 ProgramState handleIdlePress(LedButton* button) {
   switch (button->type) {
     case TYPE_FAV:
+      lastFavButtonIndex = button->index - 1;
+      {
+        if (button->button->isPressed() && Save.button->isPressed()) {
+          display.setChars("CLR");
+          return STATE_CLEAR_PRESET;
+        }
+      }
       if (button->hasPreset()) {
         switchToPreset(button->preset);
       } else {
@@ -480,40 +492,29 @@ ProgramState handleIdlePress(LedButton* button) {
       switchToPreset(activePreset + 1);
       return STATE_IDLE;
     case TYPE_BANK:
-      {
-        if (button->button->isPressed() && Save.button->isPressed()) {
-          display.setChars("STO");
-          Serial.println("SWITCH TO STORE");
-          return STATE_STORE_PRESET;
-        }
-        displayBank(activeBank);
-        return STATE_SELECT_BANK;
-      }
-
+      displayBank(activeBank);
+      return STATE_SELECT_BANK;
     case TYPE_MENU:
       {
         if (button->button->isPressed() && Save.button->isPressed()) {
-          display.setChars("CLR");
-          Serial.println("SWITCH TO CLEAR");
-          return STATE_CLEAR_PRESET;
+          display.setChars("SAV");
+          return STATE_SAVE_PRESET;
         }
-        Serial.println("HANDLE MENU PRESS IN IDLE");
-        activeMenuIndex = 0;
+
+        controlChangeValueDisplayEnabled = false;  // will be enabled again after timeout
         sendSysEx(sysExTriggerSendCC, SYSEX_SEND_CC_SIZE);
-        Submenu* menu = menus[activeMenuIndex];
-        display.setChars(menu->text);
+        activeMenuIndex = 0;
+        switchToMenu(activeMenuIndex);
         return STATE_MENU;
       }
     case TYPE_SAVE:
       if (button->button->isPressed() && Menu.button->isPressed()) {
-        display.setChars("CLR");
-        Serial.println("SWITCH TO CLEAR");
-        return STATE_CLEAR_PRESET;
+        display.setChars("SAV");
+        return STATE_SAVE_PRESET;
       }
-      if (button->button->isPressed() && Bank.button->isPressed()) {
-        display.setChars("STO");
-        Serial.println("SWITCH TO STORE");
-        return STATE_STORE_PRESET;
+      if (button->button->isPressed() && anyFavButtonPressed()) {
+        display.setChars("CLR");
+        return STATE_CLEAR_PRESET;
       }
       transitionText = "SET";
       return STATE_ASSIGN_PRESET;
@@ -571,11 +572,11 @@ ProgramState handleAssignPresetPress(LedButton* button) {
   return STATE_ERROR;
 }
 
-void onTransitionToStorePreset(LedButton* button) {
+void onTransitionToSavePreset(LedButton* button) {
   switch (button->type) {
     case TYPE_FAV:
       if (button->preset == activePreset) {
-        button->ledState = LED_ON;
+        button->ledState = LED_BLINKING;
       } else {
         button->ledState = LED_OFF;
       }
@@ -592,11 +593,11 @@ void onTransitionToStorePreset(LedButton* button) {
   }
 }
 
-ProgramState handleStorePresetPress(LedButton* button) {
+ProgramState handleSavePresetPress(LedButton* button) {
   switch (button->type) {
     case TYPE_MENU:
       transitionText = textConfirmAction;
-      sysExTriggerSavePanel[5] = activePreset;
+      sysExTriggerSavePanel[4] = activePreset;
       sendSysEx(sysExTriggerSavePanel, SYSEX_SAVE_PANEL_SIZE);
       switchToPreset(activePreset);
       return STATE_IDLE;
@@ -616,7 +617,7 @@ ProgramState handleStorePresetPress(LedButton* button) {
 void onTransitionToClearPreset(LedButton* button) {
   switch (button->type) {
     case TYPE_FAV:
-      if (button->hasPreset()) {
+      if (button->index - 1 == lastFavButtonIndex) {
         button->ledState = LED_BLINKING;
       } else {
         button->ledState = LED_OFF;
@@ -625,9 +626,9 @@ void onTransitionToClearPreset(LedButton* button) {
     case TYPE_BANK:
     case TYPE_PREV:
     case TYPE_NEXT:
-    case TYPE_MENU:
       button->ledState = LED_OFF;
       break;
+    case TYPE_MENU:
     case TYPE_SAVE:
       button->ledState = LED_BLINKING;
       break;
@@ -636,24 +637,23 @@ void onTransitionToClearPreset(LedButton* button) {
 
 ProgramState handleClearPresetPress(LedButton* button) {
   switch (button->type) {
-    case TYPE_FAV:
-      Serial.print("Clearing Preset from: ");
-      Serial.print(names[button->index - 1]);
-      button->clearPreset(activeBank);
-      switchToPreset(activePreset);
-      return STATE_IDLE;
-    case TYPE_PREV:
-      switchToBank(activeBank - 1);
-      return state;
-    case TYPE_NEXT:
-      switchToBank(activeBank + 1);
-      return state;
+    case TYPE_MENU:
+      {
+        LedButton* buttonToClear = favButtons[lastFavButtonIndex];
+        Serial.print("Clearing Preset from: ");
+        Serial.print(names[buttonToClear->index - 1]);
+        buttonToClear->clearPreset(activeBank);
+        switchToPreset(activePreset);
+        return STATE_IDLE;
+      }
     case TYPE_SAVE:
       transitionText = textAbortAction;
       switchToPreset(activePreset);
       return STATE_IDLE;
+    case TYPE_FAV:
+    case TYPE_PREV:
+    case TYPE_NEXT:
     case TYPE_BANK:
-    case TYPE_MENU:
       return state;
   }
   return STATE_ERROR;
@@ -1023,8 +1023,8 @@ void updateControlParam(MenuItem* menuItem, ProgramValueChange valueChange) {
     }
   }
 
+  midiDevice.sendControlChange(menuItem->midiCC, menuItem->value, midiChannel);
   displayParamValue(menuItem);
-  // midiDevice.sendProgramChange(menuItem->midiCC, midiChannel);
 }
 
 void displayParamValue(MenuItem* menuItem) {
@@ -1115,15 +1115,29 @@ bool continuousPress(LedButton* button) {
   }
 }
 
-void OnConnect() {
+bool anyFavButtonPressed() {
+  for (uint8_t i = 0; i < NUM_FAV_BUTTONS; i++) {
+    LedButton* favButton = favButtons[i];
+    if (favButton->button->isPressed()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void onConnect() {
   deviceConnected = true;
+  // transitionText = "CON";
+  // lastTransitionTextStart = millis();
   Serial.println("Connect");
 }
 
-void OnDisconnect() {
+void onDisconnect() {
   deviceConnected = false;
   midiChannel = 0;
   activePreset = 255;
+  // transitionText = "DIS";
+  // lastTransitionTextStart = millis();
   Serial.println("Disconnect");
 }
 
@@ -1140,7 +1154,7 @@ void onProgramChange(uint8_t channel, uint8_t preset) {
 
 void onControlChange(byte channel, byte control, byte value) {
   midiReceived = true;
-  Serial.print("Control Change, ch=");
+  Serial.print("RCV: Control Change, ch=");
   Serial.print(channel, DEC);
   Serial.print(", control=");
   Serial.print(control, DEC);
@@ -1152,26 +1166,28 @@ void onControlChange(byte channel, byte control, byte value) {
     MenuItem* menuItem = menuItems[i];
     if (menuItem->active && menuItem->midiCC == control) {
       modifiedMenuItem = menuItem;
+      break;
     }
   }
 
-  if (modifiedMenuItem != NULL) {
-    Serial.print("FOUND MENU ITEM TO MODIFY: ");
-    Serial.print(modifiedMenuItem->text);
-    Serial.print(", CC: ");
-    Serial.println(modifiedMenuItem->midiCC);
+  lastControlChangeReceivedMillis = millis();
 
+  // Store existing display value to revert after control change ends
+  if (!receivingControlChange) {
+    display.getSegments(displaySegments);
+    receivingControlChange = true;
+  }
+  if (modifiedMenuItem != NULL) {
     modifiedMenuItem->value = value;
-    // Store existing display value to revert after control change ends
-    if (!displayingControlChange) {
-      display.getSegments(displaySegments);
-      displayingControlChange = true;
+  }
+  if (controlChangeValueDisplayEnabled) {
+    if (modifiedMenuItem != NULL) {
+      displayParamValue(modifiedMenuItem);
+    } else {
+      display.setNumber(value);
     }
-    display.setNumber(modifiedMenuItem->value);
-    lastControlChangeReceivedMillis = millis();
   } else {
-    Serial.print("Control Change not handled: ");
-    Serial.print(control);
+    Serial.println("DISPLAY DISABLED");
   }
 }
 
@@ -1209,7 +1225,6 @@ void onSystemExclusive(byte* data, unsigned int length) {
 void displayStartupAnimation() {
   if (millis() - lastTransitionTextStart > STARTUP_ANIMATION_DURATION) {
     uint8_t animationStep = animation[startupAnimationStep - 1];
-    // printBin(animationStep);
     startupAnimationStep--;
 
     display.blank();
@@ -1242,19 +1257,13 @@ void displayStartupAnimation() {
   display.refreshDisplay();
 }
 
-void sendSysEx(const byte* data, unsigned int size) {
-  Serial.print("SENDING SYSEX, (size=");
+void sendSysEx(byte* data, unsigned int size) {
+  Serial.print("SENDING SYSEX (size=");
   Serial.print(size);
-  Serial.println("): ");
+  Serial.print(") = ");
   printBytes(data, size);
-  Serial.println();
-
-
-  Serial.println("DEBUG: CC");
-  printBytes(sysExTriggerSendCC, 7);
-  Serial.println("DEBUG: CC");
-  printBytes(sysExTriggerSavePanel, 17);
-  // midiDevice.sendSysEx(sizeof(data), data);
+  // const byte* 
+  midiDevice.sendSysEx(size, data);
 }
 
 void printBytes(const byte* data, unsigned int size) {
