@@ -1,14 +1,13 @@
 #ifndef States_h
 #define States_h
 
-#include "SevSeg.h"
-
 enum ProgramState {
   STATE_ERROR,
-  
+
   STATE_IDLE,
   STATE_SELECT_BANK,
   STATE_ASSIGN_PRESET,
+  STATE_STORE_PRESET,
   STATE_CLEAR_PRESET,
 
 
@@ -37,11 +36,19 @@ enum LedState {
   LED_BLINKING
 };
 
+enum ProgramValueChange {
+  VALUE_DECREASE,
+  VALUE_INCREASE
+};
+
 
 struct MenuItem {
   char text[4];
+  byte midiCC;
   boolean active;
   uint8_t value;
+  int displayMin;
+  int displayMax;
 };
 
 struct Submenu {
